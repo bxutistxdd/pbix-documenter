@@ -122,7 +122,34 @@ async function parseFile(file) {
   return result;
 }
 
-async function analyzeWithGroq(parsed, groqKey) {
+async function groqFetch(body, groqKey, onLog) {
+  const MAX_RETRIES = 4;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${groqKey}` },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return res.json();
+    const err = await res.json().catch(() => ({}));
+    const msg = err?.error?.message || `Groq ${res.status}`;
+    if (res.status === 429) {
+      // TPD (tokens per day) agotado: esperar minutos es inútil en sesión → señal para fallback de modelo.
+      if (/per day|TPD/i.test(msg)) { const e = new Error(msg); e.isDailyLimit = true; throw e; }
+      // TPM/RPM (por minuto): backoff y reintento.
+      if (attempt < MAX_RETRIES) {
+        const ra = parseFloat(res.headers.get("retry-after"));
+        const waitMs = Number.isFinite(ra) ? ra * 1000 + 500 : Math.min(2000 * 2 ** attempt, 30000);
+        onLog?.(`Rate limit por minuto — reintentando en ${Math.ceil(waitMs / 1000)}s (intento ${attempt + 1}/${MAX_RETRIES})...`, "warn");
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+    }
+    throw new Error(msg);
+  }
+}
+
+async function analyzeWithGroq(parsed, groqKey, onLog) {
   const summary = {
     fileName: parsed.fileName,
     sources: parsed.sources,
@@ -157,23 +184,29 @@ Responde SOLO con JSON válido (sin markdown), estructura exacta:
 }
 Incluye solo secciones con datos reales. En medidas DAX explica propósito de negocio.`;
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${groqKey}` },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 4000,
-      temperature: 0.2,
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-    }),
-  });
+  const body = {
+    max_tokens: 4000,
+    temperature: 0.2,
+    messages: [{ role: "user", content: prompt }],
+    response_format: { type: "json_object" },
+  };
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `Groq ${res.status}`);
+  // 70b: mejor calidad pero solo 100K TPD. 8b-instant: ~500K TPD → respaldo cuando se agota el día.
+  const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+  let data;
+  for (let i = 0; i < MODELS.length; i++) {
+    try {
+      if (i > 0) onLog?.(`Presupuesto diario (TPD) de ${MODELS[i - 1]} agotado. Cambiando a ${MODELS[i]}...`, "warn");
+      data = await groqFetch({ ...body, model: MODELS[i] }, groqKey, onLog);
+      if (i > 0) onLog?.(`Generado con modelo de respaldo ${MODELS[i]} (calidad menor que 70b).`, "ok");
+      break;
+    } catch (e) {
+      if (e.isDailyLimit && i < MODELS.length - 1) continue;
+      if (e.isDailyLimit) throw new Error("Presupuesto diario agotado en todos los modelos. Reintenta tras el reseteo (medianoche UTC).");
+      throw e;
+    }
   }
-  const data = await res.json();
+
   return JSON.parse(data.choices?.[0]?.message?.content || "{}");
 }
 
@@ -235,7 +268,7 @@ export default function App() {
         parsed.warnings.forEach(w => addLog(w, "warn"));
         addLog(`✓ Tablas: ${parsed.tables.length} · Medidas: ${parsed.measures.length} · Relaciones: ${parsed.relationships.length} · Páginas: ${parsed.pages.length}`, "ok");
         addLog("Analizando con Groq llama-3.3-70b...", "info");
-        const docData = await analyzeWithGroq(parsed, groqKey.trim());
+        const docData = await analyzeWithGroq(parsed, groqKey.trim(), addLog);
         setProgress(85); addLog("✓ Análisis completado", "ok");
         const md = buildMarkdown(docData, parsed);
         const url = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
