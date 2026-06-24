@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { buildDocxBlob } from "./docx.js";
 
 const C = {
   yellow: "#f7c948", dark: "#0f1117", mid: "#1a1f2e", surface: "#141824",
@@ -173,6 +174,8 @@ Responde SOLO con JSON válido (sin markdown), estructura exacta:
   "titulo": "Documentación Técnica: [nombre sin extension]",
   "fecha": "${new Date().toLocaleDateString("es-CO", { year: "numeric", month: "long", day: "numeric" })}",
   "resumen_ejecutivo": "3-4 oraciones sobre propósito, arquitectura y alcance.",
+  "introduccion": "2-3 oraciones presentando el modelo, su dominio de negocio y para qué sirve.",
+  "conclusiones": "2-3 oraciones de cierre: estado del modelo, fortalezas y recomendaciones.",
   "secciones": [
     { "id": "fuentes_datos", "titulo": "Fuentes de Datos", "contenido": "...", "items": [{"nombre":"...","tipo":"...","descripcion":"..."}] },
     { "id": "arquitectura_modelo", "titulo": "Arquitectura del Modelo", "contenido": "Patrón (estrella/copo/etc), convenciones, capas.", "items": [] },
@@ -208,27 +211,6 @@ Incluye solo secciones con datos reales. En medidas DAX explica propósito de ne
   }
 
   return JSON.parse(data.choices?.[0]?.message?.content || "{}");
-}
-
-function buildMarkdown(docData, parsed) {
-  const L = [];
-  L.push(`# ${docData.titulo}`);
-  L.push(`**Fecha:** ${docData.fecha}  `);
-  L.push(`**Tablas:** ${parsed.tables.length} | **Medidas:** ${parsed.measures.length} | **Relaciones:** ${parsed.relationships.length} | **Páginas:** ${parsed.pages.length}`);
-  L.push(""); L.push("---"); L.push("");
-  L.push("## Resumen Ejecutivo"); L.push(docData.resumen_ejecutivo); L.push("");
-  for (const sec of docData.secciones) {
-    L.push(`## ${sec.titulo}`);
-    if (sec.contenido) { L.push(sec.contenido); L.push(""); }
-    const items = sec.items || [];
-    if (sec.id === "fuentes_datos") items.forEach(i => { L.push(`### ${i.nombre}`); L.push(`- **Tipo:** ${i.tipo}`); if (i.descripcion) L.push(`- ${i.descripcion}`); L.push(""); });
-    else if (sec.id === "tablas_columnas") items.forEach(i => { L.push(`### ${i.tabla} *(${i.tipo})*`); if (i.descripcion) L.push(i.descripcion); if (i.columnas_clave?.length) L.push(`\n**Columnas clave:** ${i.columnas_clave.join(", ")}`); L.push(""); });
-    else if (sec.id === "medidas_dax") items.forEach(i => { L.push(`### \`[${i.nombre}]\` — *${i.tabla}*`); if (i.proposito) L.push(`**Propósito:** ${i.proposito}`); if (i.expresion) L.push("```dax\n" + i.expresion.substring(0, 400) + "\n```"); L.push(""); });
-    else if (sec.id === "relaciones") { if (items.length) { L.push("| Desde | Hasta | Cardinalidad | Estado |"); L.push("|-------|-------|-------------|--------|"); items.forEach(i => L.push(`| ${i.desde} | ${i.hasta} | ${i.cardinalidad} | ${i.activa ? "✅" : "⚠️"} |`)); } L.push(""); }
-    else if (sec.id === "paginas_reporte") items.forEach(i => { L.push(`### ${i.pagina}`); if (i.proposito) L.push(i.proposito); if (i.visuales?.length) L.push(`\n**Visuales:** ${i.visuales.join(", ")}`); L.push(""); });
-    else items.forEach(i => { Object.entries(i).forEach(([k, v]) => L.push(`- **${k}:** ${Array.isArray(v) ? v.join(", ") : v}`)); L.push(""); });
-  }
-  return L.join("\n");
 }
 
 const inp = { background: "#0a0d13", border: `1px solid #2d3748`, borderRadius: 8, color: "#e2e8f0", fontSize: 13, padding: "10px 14px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", outline: "none" };
@@ -270,10 +252,11 @@ export default function App() {
         addLog("Analizando con Groq llama-3.3-70b...", "info");
         const docData = await analyzeWithGroq(parsed, groqKey.trim(), addLog);
         setProgress(85); addLog("✓ Análisis completado", "ok");
-        const md = buildMarkdown(docData, parsed);
-        const url = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
+        addLog("Generando documento Word...", "info");
+        const blob = await buildDocxBlob(docData, parsed);
+        const url = URL.createObjectURL(blob);
         setProgress(100); addLog("✅ Listo", "ok");
-        setResult({ url, name: file.name.replace(/\.(pbix|pbit)$/, "_documentacion.md"), docData, parsed });
+        setResult({ url, name: file.name.replace(/\.(pbix|pbit)$/, "_documentacion.docx"), docData, parsed });
       }
     } catch (e) { addLog(`Error: ${e.message}`, "error"); }
     finally { setRunning(false); }
