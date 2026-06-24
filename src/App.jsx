@@ -8,8 +8,17 @@ const C = {
 
 function decodeBuffer(buf) {
   const b = new Uint8Array(buf);
+  // BOM UTF-16 LE: FF FE
   if (b[0] === 0xFF && b[1] === 0xFE) return new TextDecoder("utf-16le").decode(buf);
+  // BOM UTF-16 BE: FE FF
   if (b[0] === 0xFE && b[1] === 0xFF) return new TextDecoder("utf-16be").decode(buf);
+  // No BOM — detect UTF-16 LE by null bytes pattern (every odd byte = 0x00 for ASCII/Latin)
+  // Check first 20 bytes: if even-indexed bytes are printable and odd-indexed are 0x00 → UTF-16 LE
+  let nullOdds = 0;
+  const check = Math.min(b.length, 32);
+  for (let i = 1; i < check; i += 2) { if (b[i] === 0x00) nullOdds++; }
+  if (nullOdds >= check / 4) return new TextDecoder("utf-16le").decode(buf);
+  // Default UTF-8
   return new TextDecoder("utf-8").decode(buf);
 }
 
@@ -40,10 +49,8 @@ async function parseFile(file) {
   if (connFile) {
     try {
       const raw = decodeBuffer(await connFile.async("arraybuffer")).replace(/^\uFEFF/, "");
-      const conn = JSON.parse(raw);
-      result.sources = (conn.Connections || []).map(c => ({
-        name: c.ConnectionString || "Sin nombre",
-        type: c.ConnectionType || "?"
+      result.sources = (JSON.parse(raw).Connections || []).map(c => ({
+        name: c.ConnectionString || "Sin nombre", type: c.ConnectionType || "?"
       }));
     } catch (e) { result.warnings.push(`Connections: ${e.message}`); }
   }
@@ -55,23 +62,14 @@ async function parseFile(file) {
       const buf = await modelFile.async("arraybuffer");
       let raw = decodeBuffer(buf).replace(/^\uFEFF/, "");
 
-      // Try pako if not JSON
+      // Fallback pako if still not JSON
       if (!raw.trim().startsWith("{") && !raw.trim().startsWith("[")) {
-        try {
-          raw = window.pako.inflate(new Uint8Array(buf), { to: "string" }).replace(/^\uFEFF/, "");
-        } catch (_) {}
+        try { raw = window.pako.inflate(new Uint8Array(buf), { to: "string" }).replace(/^\uFEFF/, ""); } catch (_) {}
       }
 
       const parsed = JSON.parse(raw);
-
-      // .pbit = array: [{ model: {...} }]
-      // .pbix = object: { model: {...} } or direct model
-      let db;
-      if (Array.isArray(parsed)) {
-        db = parsed[0]?.model || parsed[0];
-      } else {
-        db = parsed.model || parsed;
-      }
+      // .pbit = array [{model:{...}}] OR object {model:{...}}
+      const db = Array.isArray(parsed) ? (parsed[0]?.model || parsed[0]) : (parsed.model || parsed);
 
       for (const t of (db.tables || [])) {
         if (t.name?.startsWith("DateTableTemplate") || t.name?.startsWith("LocalDateTable")) continue;
@@ -88,12 +86,7 @@ async function parseFile(file) {
         result.tables.push(entry);
       }
       for (const r of (db.relationships || [])) {
-        result.relationships.push({
-          from: `${r.fromTable}[${r.fromColumn}]`,
-          to: `${r.toTable}[${r.toColumn}]`,
-          cardinality: r.crossFilteringBehavior || "SingleDirection",
-          active: r.isActive !== false
-        });
+        result.relationships.push({ from: `${r.fromTable}[${r.fromColumn}]`, to: `${r.toTable}[${r.toColumn}]`, cardinality: r.crossFilteringBehavior || "SingleDirection", active: r.isActive !== false });
       }
       for (const role of (db.roles || [])) {
         result.roles.push({ name: role.name, tableFilters: (role.tablePermissions || []).map(p => ({ table: p.name, filter: p.filterExpression || "" })) });
@@ -118,10 +111,7 @@ async function parseFile(file) {
         for (const vc of (section.visualContainers || [])) {
           try {
             const cfg = typeof vc.config === "string" ? JSON.parse(vc.config) : vc.config;
-            page.visuals.push({
-              type: cfg?.singleVisual?.visualType || "visual",
-              title: cfg?.singleVisual?.vcObjects?.title?.[0]?.properties?.text?.expr?.Literal?.Value?.replace(/^'|'$/g, "") || ""
-            });
+            page.visuals.push({ type: cfg?.singleVisual?.visualType || "visual", title: cfg?.singleVisual?.vcObjects?.title?.[0]?.properties?.text?.expr?.Literal?.Value?.replace(/^'|'$/g, "") || "" });
           } catch (_) {}
         }
         result.pages.push(page);
@@ -194,7 +184,6 @@ function buildMarkdown(docData, parsed) {
   L.push(`**Tablas:** ${parsed.tables.length} | **Medidas:** ${parsed.measures.length} | **Relaciones:** ${parsed.relationships.length} | **Páginas:** ${parsed.pages.length}`);
   L.push(""); L.push("---"); L.push("");
   L.push("## Resumen Ejecutivo"); L.push(docData.resumen_ejecutivo); L.push("");
-
   for (const sec of docData.secciones) {
     L.push(`## ${sec.titulo}`);
     if (sec.contenido) { L.push(sec.contenido); L.push(""); }
@@ -209,11 +198,7 @@ function buildMarkdown(docData, parsed) {
   return L.join("\n");
 }
 
-const inp = {
-  background: "#0a0d13", border: `1px solid ${C.border}`, borderRadius: 8,
-  color: C.text, fontSize: 13, padding: "10px 14px", width: "100%",
-  boxSizing: "border-box", fontFamily: "monospace", outline: "none",
-};
+const inp = { background: "#0a0d13", border: `1px solid #2d3748`, borderRadius: 8, color: "#e2e8f0", fontSize: 13, padding: "10px 14px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", outline: "none" };
 
 export default function App() {
   const [groqKey, setGroqKey] = useState(localStorage.getItem("groq_key") || "");
@@ -227,13 +212,11 @@ export default function App() {
   const logRef = useRef(null);
   const lc = { info: C.blue, ok: C.green, warn: C.orange, error: C.red, section: C.yellow };
 
-  const saveKey = (k) => { setGroqKey(k); localStorage.setItem("groq_key", k); };
-
+  const saveKey = k => { setGroqKey(k); localStorage.setItem("groq_key", k); };
   const addLog = (msg, type = "info") => {
     setLogs(p => [...p, { msg, type, time: new Date().toLocaleTimeString("es-CO") }]);
     setTimeout(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight), 50);
   };
-
   const addFiles = fs => {
     const valid = fs.filter(f => f.name.endsWith(".pbix") || f.name.endsWith(".pbit"));
     setFiles(p => { const ex = new Set(p.map(f => f.name)); return [...p, ...valid.filter(f => !ex.has(f.name))]; });
@@ -272,29 +255,20 @@ export default function App() {
           <div style={{ fontSize: 11, color: C.muted }}>Groq · llama-3.3-70b-versatile · Gratis</div>
         </div>
       </div>
-
       <div style={{ maxWidth: 760, margin: "0 auto", padding: "20px" }}>
-        {/* API Key */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>
             🔑 GROQ API KEY
             <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: C.blue, marginLeft: 10, fontSize: 11 }}>→ console.groq.com</a>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <input type={showKey ? "text" : "password"} placeholder="gsk_..." value={groqKey}
-              onChange={e => saveKey(e.target.value)} style={{ ...inp, flex: 1 }} />
-            <button onClick={() => setShowKey(p => !p)}
-              style={{ background: C.mid, border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, padding: "0 14px", cursor: "pointer" }}>
-              {showKey ? "🙈" : "👁"}
-            </button>
+            <input type={showKey ? "text" : "password"} placeholder="gsk_..." value={groqKey} onChange={e => saveKey(e.target.value)} style={{ ...inp, flex: 1 }} />
+            <button onClick={() => setShowKey(p => !p)} style={{ background: C.mid, border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, padding: "0 14px", cursor: "pointer" }}>{showKey ? "🙈" : "👁"}</button>
           </div>
           {groqKey && <div style={{ fontSize: 11, color: C.green, marginTop: 6 }}>✓ Key guardada en este navegador</div>}
         </div>
 
-        {/* Drop zone */}
-        <div
-          onDragOver={e => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
+        <div onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
           onDrop={e => { e.preventDefault(); setDragging(false); addFiles([...e.dataTransfer.files]); }}
           onClick={() => document.getElementById("fi").click()}
           style={{ border: `2px dashed ${dragging ? C.yellow : C.border}`, borderRadius: 10, padding: "32px 24px", textAlign: "center", cursor: "pointer", background: dragging ? C.mid : C.surface, transition: "all 0.2s" }}>
@@ -312,8 +286,7 @@ export default function App() {
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{f.name}</div>
                   <div style={{ fontSize: 11, color: C.muted }}>{(f.size / 1024 / 1024).toFixed(2)} MB</div>
                 </div>
-                <button onClick={() => setFiles(p => p.filter((_, j) => j !== i))}
-                  style={{ background: "none", border: "none", color: C.red, cursor: "pointer" }}>✕</button>
+                <button onClick={() => setFiles(p => p.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 16 }}>✕</button>
               </div>
             ))}
             <button onClick={run} disabled={running} style={{ width: "100%", marginTop: 4, padding: 13, background: running ? "#5a4a10" : "linear-gradient(135deg,#f7c948,#f59e0b)", color: "#0f1117", fontWeight: 700, fontSize: 14, border: "none", borderRadius: 10, cursor: running ? "not-allowed" : "pointer" }}>
@@ -328,7 +301,7 @@ export default function App() {
         )}
 
         {logs.length > 0 && (
-          <div ref={logRef} style={{ background: "#0a0d13", border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginTop: 16, maxHeight: 200, overflowY: "auto", fontFamily: "monospace", fontSize: 12 }}>
+          <div ref={logRef} style={{ background: "#0a0d13", border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginTop: 16, maxHeight: 220, overflowY: "auto", fontFamily: "monospace", fontSize: 12 }}>
             {logs.map((l, i) => <div key={i} style={{ color: lc[l.type] || C.text, padding: "1px 0" }}>[{l.time}] {l.msg}</div>)}
           </div>
         )}
