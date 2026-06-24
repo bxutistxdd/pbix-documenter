@@ -125,30 +125,26 @@ CONTEXTO: Proyecto segurosdelestado Azure DevOps. tbl_=hechos, DIM_=dimensiones,
 Incluye las ${parsed.tables.length} tablas.`,
   "Call 2/5 — tablas");
 
-  await new Promise(r=>setTimeout(r,6000));
-
-  // CALL 3a: measures batch 1 (first half)
-  const half=Math.ceil(parsed.measures.length/2);
-  const batch1=parsed.measures.slice(0,half).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,120)}));
-  const r3a=await call(`Experto DAX Power BI. SOLO JSON sin markdown.
-Medidas (nombre, tabla, expresion resumida): ${JSON.stringify(batch1)}
+  // CALL 3a-3d: measures in 4 batches
+  const mPrompt=(batch,label)=>call(`Experto DAX Power BI. SOLO JSON sin markdown.
+Medidas: ${JSON.stringify(batch)}
 Contexto: reporte métricas implementación/testing Azure DevOps Seguros del Estado.
-Para cada medida: 1 oración describiendo qué calcula y para qué sirve en el reporte.
-{"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración clara y concisa"}]}`,
-  "Call 3a/5 — medidas lote 1");
+Para cada medida: 1 oración describiendo qué calcula y para qué sirve.
+{"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración"}]}`,label);
+
+  const bSize=Math.ceil(parsed.measures.length/4);
+  const mkBatch=(i)=>parsed.measures.slice(i*bSize,(i+1)*bSize).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,120)}));
 
   await new Promise(r=>setTimeout(r,6000));
+  const r3a=await mPrompt(mkBatch(0),"Call 3a/6 — medidas lote 1/4");
+  await new Promise(r=>setTimeout(r,6000));
+  const r3b=await mPrompt(mkBatch(1),"Call 3b/6 — medidas lote 2/4");
+  await new Promise(r=>setTimeout(r,6000));
+  const r3c=await mPrompt(mkBatch(2),"Call 3c/6 — medidas lote 3/4");
+  await new Promise(r=>setTimeout(r,6000));
+  const r3d=await mPrompt(mkBatch(3),"Call 3d/6 — medidas lote 4/4");
 
-  // CALL 3b: measures batch 2 (second half)
-  const batch2=parsed.measures.slice(half).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,120)}));
-  const r3b=await call(`Experto DAX Power BI. SOLO JSON sin markdown.
-Medidas (nombre, tabla, expresion resumida): ${JSON.stringify(batch2)}
-Contexto: reporte métricas implementación/testing Azure DevOps Seguros del Estado.
-Para cada medida: 1 oración describiendo qué calcula y para qué sirve en el reporte.
-{"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración clara y concisa"}]}`,
-  "Call 3b/5 — medidas lote 2");
-
-  const r2final={...r2,medidas:[...(r3a.medidas||[]),...(r3b.medidas||[])]};
+  const r2final={...r2,medidas:[...(r3a.medidas||[]),...(r3b.medidas||[]),...(r3c.medidas||[]),...(r3d.medidas||[])]};
 
   await new Promise(r=>setTimeout(r,6000));
 
@@ -164,7 +160,7 @@ CONTEXTO: Modelo de métricas de implementación/testing en Azure DevOps para Se
 Para cada relación explica en 1 oración su motivo y uso en el modelo. Usa los nombres completos y reales de tablas y columnas.
 {"relaciones":[{"from":"tabla[columna] completo","to":"tabla[columna] completo","cardinalidad":"Uno a muchos/Muchos a uno/Muchos a muchos","activa":true,"motivo":"1 oración: por qué existe y cómo se usa para filtrar o cruzar datos"}]}
 IMPORTANTE: incluye las ${parsed.relationships.length} relaciones.`,
-  "Call 4/5 — relaciones");
+  "Call 5/6 — relaciones");
 
   return {...r1,...r2final,...r3};
 }
@@ -389,7 +385,7 @@ export default function App(){
     <div style={{background:C.dark,minHeight:"100vh",fontFamily:"'Segoe UI',system-ui,sans-serif",color:C.text}}>
       <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
         <span style={{fontSize:22}}>📊</span>
-        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v12</div></div>
+        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v13</div></div>
       </div>
       <div style={{maxWidth:760,margin:"0 auto",padding:"20px"}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:16,marginBottom:16}}>
