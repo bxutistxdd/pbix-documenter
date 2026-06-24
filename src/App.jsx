@@ -116,17 +116,27 @@ CONTEXTO: Reporte Power BI de Seguros del Estado. Mide métricas de implementaci
 
   await new Promise(r=>setTimeout(r,6000));
 
-  // CALL 2: tables + measures (descriptions only, no expressions)
+  // CALL 2a: tables only
   const tablesCompact=parsed.tables.map(t=>({n:t.name,cols:t.columns.map(c=>c.name).join("|")}));
-  const measuresCompact=parsed.measures.map(m=>({n:m.name,t:m.table,e:m.expression.substring(0,120)}));
-  const r2=await call(`Eres experto en Power BI y Azure DevOps. Responde SOLO JSON sin markdown.
-TABLAS: ${JSON.stringify(tablesCompact).substring(0,4500)}
-MEDIDAS (nombre|tabla|expresion_resumida): ${JSON.stringify(measuresCompact).substring(0,3500)}
-CONTEXTO: Proyecto segurosdelestado en Azure DevOps. Tablas OData tienen campos estándar de Analytics API. Tablas con prefijo tbl_ son de hechos, DIM_ son dimensiones, SP_ vienen de SharePoint.
-Responde:
-{"tablas":[{"nombre":"nombre exacto","tipo":"Hecho/Dimensión/Staging/Parámetro/Calendario","origen":"OData Azure DevOps/SharePoint List/Calculada/Combinada","descripcion":"1-2 oraciones función de la tabla","columnas":[{"nombre":"nombre exacto col","descripcion":"qué representa en el negocio, máximo 15 palabras"}]}],"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración: qué calcula y para qué se usa en el reporte"}]}
-IMPORTANTE: incluye TODAS las ${parsed.tables.length} tablas y TODAS las ${parsed.measures.length} medidas.`,
-  "Call 2/3 — tablas y medidas");
+  const r2a=await call(`Eres experto en Power BI y Azure DevOps. Responde SOLO JSON sin markdown.
+TABLAS: ${JSON.stringify(tablesCompact).substring(0,6000)}
+CONTEXTO: Proyecto segurosdelestado Azure DevOps. tbl_=hechos, DIM_=dimensiones, SP_=SharePoint, Hierarchy=jerarquía OData.
+{"tablas":[{"nombre":"nombre exacto","tipo":"Hecho/Dimensión/Staging/Parámetro/Calendario","origen":"OData Azure DevOps/SharePoint List/Calculada/Combinada","descripcion":"1-2 oraciones función","columnas":[{"nombre":"nombre exacto col","descripcion":"qué representa, máximo 12 palabras"}]}]}
+Incluye las ${parsed.tables.length} tablas.`,
+  "Call 2a/4 — tablas");
+
+  await new Promise(r=>setTimeout(r,6000));
+
+  // CALL 2b: measures only
+  const measuresCompact=parsed.measures.map(m=>({n:m.name,t:m.table,e:m.expression.substring(0,150)}));
+  const r2b=await call(`Eres experto en Power BI y DAX. Responde SOLO JSON sin markdown.
+MEDIDAS: ${JSON.stringify(measuresCompact).substring(0,7000)}
+Para cada medida describe en 1 oración qué calcula y para qué se usa en el reporte de métricas de implementación/testing.
+{"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración sobre qué calcula y su uso"}]}
+Incluye las ${parsed.measures.length} medidas.`,
+  "Call 2b/4 — medidas");
+
+  const r2={tablas:r2a.tablas||[],medidas:r2b.medidas||[]};
 
   await new Promise(r=>setTimeout(r,6000));
 
@@ -142,7 +152,7 @@ CONTEXTO: Modelo de métricas de implementación/testing en Azure DevOps para Se
 Para cada relación explica en 1 oración su motivo y uso en el modelo. Usa los nombres completos y reales de tablas y columnas.
 {"relaciones":[{"from":"tabla[columna] completo","to":"tabla[columna] completo","cardinalidad":"Uno a muchos/Muchos a uno/Muchos a muchos","activa":true,"motivo":"1 oración: por qué existe y cómo se usa para filtrar o cruzar datos"}]}
 IMPORTANTE: incluye las ${parsed.relationships.length} relaciones.`,
-  "Call 3/3 — relaciones");
+  "Call 3/4 — relaciones");
 
   return {...r1,...r2,...r3};
 }
@@ -367,7 +377,7 @@ export default function App(){
     <div style={{background:C.dark,minHeight:"100vh",fontFamily:"'Segoe UI',system-ui,sans-serif",color:C.text}}>
       <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
         <span style={{fontSize:22}}>📊</span>
-        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v9</div></div>
+        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v10</div></div>
       </div>
       <div style={{maxWidth:760,margin:"0 auto",padding:"20px"}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:16,marginBottom:16}}>
