@@ -184,7 +184,7 @@ async function buildDOCX(docData, parsed) {
       children:content
     }]
   });
-  return await Packer.toBuffer(doc);
+  return await Packer.toBlob(doc);
 }
 
 const inp={background:"#0a0d13",border:"1px solid #2d3748",borderRadius:8,color:"#e2e8f0",fontSize:13,padding:"10px 14px",width:"100%",boxSizing:"border-box",fontFamily:"monospace",outline:"none"};
@@ -208,8 +208,7 @@ export default function App(){
       addLog("Analizando con Groq llama-3.3-70b...","info");
       const docData=await analyzeWithGroq(parsed,groqKey.trim());setProgress(70);addLog("✓ Análisis IA completado","ok");
       addLog("Generando documento Word...","info");
-      const buffer=await buildDOCX(docData,parsed);setProgress(95);
-      const blob=new Blob([buffer],{type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+      const blob=await buildDOCX(docData,parsed);setProgress(95);
       const url=URL.createObjectURL(blob);
       setProgress(100);addLog("✅ Documento Word generado","ok");
       setResult({url,name:file.name.replace(/\.(pbix|pbit)$/,"_documentacion.docx"),docData,parsed});
