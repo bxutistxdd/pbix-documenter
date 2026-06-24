@@ -80,14 +80,19 @@ async function parseFile(file) {
           entry.columns.push({ name: col.name, dataType: col.dataType || "?", isHidden: !!col.isHidden, calculated: !!col.expression });
         }
         for (const m of (t.measures || [])) {
-          const me = { name: m.name, expression: m.expression || "", formatString: m.formatString || "", table: t.name };
+          const expr = Array.isArray(m.expression) ? m.expression.join("\n") : (m.expression || "");
+          const me = { name: m.name, expression: expr, formatString: m.formatString || "", table: t.name };
           entry.measures.push(me);
           result.measures.push(me);
         }
         result.tables.push(entry);
       }
       for (const r of (db.relationships || [])) {
-        result.relationships.push({ from: `${r.fromTable}[${r.fromColumn}]`, to: `${r.toTable}[${r.toColumn}]`, cardinality: r.crossFilteringBehavior || "SingleDirection", active: r.isActive !== false });
+        result.relationships.push({
+          from: `${r.fromTable}[${r.fromColumn}]`, to: `${r.toTable}[${r.toColumn}]`,
+          fromTable: r.fromTable, fromColumn: r.fromColumn, toTable: r.toTable, toColumn: r.toColumn,
+          cardinality: r.crossFilteringBehavior || "SingleDirection", active: r.isActive !== false,
+        });
       }
       for (const role of (db.roles || [])) {
         result.roles.push({ name: role.name, tableFilters: (role.tablePermissions || []).map(p => ({ table: p.name, filter: p.filterExpression || "" })) });
@@ -151,44 +156,38 @@ async function groqFetch(body, groqKey, onLog) {
 }
 
 async function analyzeWithGroq(parsed, groqKey, onLog) {
+  // Resumen COMPACTO: solo nombres/tipos (no DAX ni todas las columnas) → entrada chica, cabe en 1 call.
+  const realRels = parsed.relationships.filter(r => !/LocalDateTable|DateTableTemplate/i.test(`${r.fromTable}${r.toTable}`));
   const summary = {
     fileName: parsed.fileName,
-    sources: parsed.sources,
-    tables: parsed.tables.map(t => ({
-      name: t.name, isHidden: t.isHidden,
-      columns: t.columns.map(c => ({ name: c.name, type: c.dataType, calculated: c.calculated })),
-      measures: t.measures.map(m => ({ name: m.name, expression: m.expression.substring(0, 200) })),
-    })),
-    relationships: parsed.relationships,
-    pages: parsed.pages,
-    roles: parsed.roles,
+    tablas: parsed.tables.map(t => ({ n: t.name, cols: t.columns.slice(0, 12).map(c => c.name) })),
+    medidas: parsed.measures.map(m => ({ n: m.name, t: m.table })),
+    relaciones: realRels.map(r => ({ d: r.from, h: r.to })),
+    paginas: parsed.pages.map(p => ({ n: p.name, vis: p.visuals.map(v => v.type) })),
   };
 
-  const prompt = `Eres experto en Power BI. Analiza este modelo y genera documentación técnica interna en español.
+  const prompt = `Eres experto en Power BI. Genera narrativa de documentación técnica en español para este modelo.
+No inventes datos: describe en función de los nombres. Sé conciso (cada descripción/propósito máx ~18 palabras).
 
 MODELO:
-${JSON.stringify(summary, null, 2).substring(0, 14000)}
+${JSON.stringify(summary).substring(0, 12000)}
 
-Responde SOLO con JSON válido (sin markdown), estructura exacta:
+Responde SOLO JSON válido (sin markdown), con esta estructura EXACTA:
 {
-  "titulo": "Documentación Técnica: [nombre sin extension]",
-  "fecha": "${new Date().toLocaleDateString("es-CO", { year: "numeric", month: "long", day: "numeric" })}",
-  "resumen_ejecutivo": "3-4 oraciones sobre propósito, arquitectura y alcance.",
-  "introduccion": "2-3 oraciones presentando el modelo, su dominio de negocio y para qué sirve.",
-  "conclusiones": "2-3 oraciones de cierre: estado del modelo, fortalezas y recomendaciones.",
-  "secciones": [
-    { "id": "fuentes_datos", "titulo": "Fuentes de Datos", "contenido": "...", "items": [{"nombre":"...","tipo":"...","descripcion":"..."}] },
-    { "id": "arquitectura_modelo", "titulo": "Arquitectura del Modelo", "contenido": "Patrón (estrella/copo/etc), convenciones, capas.", "items": [] },
-    { "id": "tablas_columnas", "titulo": "Tablas y Columnas", "contenido": "...", "items": [{"tabla":"...","tipo":"Hecho/Dimensión/Staging/Parámetro","columnas_clave":["..."],"descripcion":"..."}] },
-    { "id": "medidas_dax", "titulo": "Medidas DAX", "contenido": "...", "items": [{"nombre":"...","tabla":"...","expresion":"...","proposito":"..."}] },
-    { "id": "relaciones", "titulo": "Relaciones del Modelo", "contenido": "...", "items": [{"desde":"...","hasta":"...","cardinalidad":"...","activa":true}] },
-    { "id": "paginas_reporte", "titulo": "Páginas del Reporte", "contenido": "...", "items": [{"pagina":"...","visuales":["..."],"proposito":"..."}] }
-  ]
+  "titulo": "Documentación Técnica: ${(parsed.fileName || "").replace(/\.(pbix|pbit)$/i, "")}",
+  "introduccion": "2-3 oraciones: dominio de negocio del reporte y para qué sirve.",
+  "resumen_ejecutivo": "3-4 oraciones: propósito, arquitectura y alcance.",
+  "arquitectura": "2-4 oraciones: patrón (estrella/capas), convenciones de nombres, flujo de datos.",
+  "conclusiones": "2-3 oraciones: estado del modelo, fortalezas y recomendaciones.",
+  "tablas": [{ "tabla": "nombre exacto", "tipo": "Hecho|Dimensión|Staging|Parámetro|Puente", "origen": "OData Azure DevOps|SharePoint|Calculada|Combinada", "descripcion": "qué almacena" }],
+  "medidas": [{ "medida": "nombre exacto", "proposito": "qué calcula y para qué, en términos de negocio" }],
+  "paginas": [{ "pagina": "nombre exacto", "descripcion": "qué mide/muestra la página" }],
+  "relaciones": [{ "desde": "Tabla[col]", "hacia": "Tabla[col]", "motivo": "para qué sirve la relación" }]
 }
-Incluye solo secciones con datos reales. En medidas DAX explica propósito de negocio.`;
+Incluye TODOS los elementos del modelo. Usa los nombres exactos para poder casarlos.`;
 
   const body = {
-    max_tokens: 4000,
+    max_tokens: 6000,
     temperature: 0.2,
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
@@ -334,7 +333,7 @@ export default function App() {
               ))}
             </div>
             <div style={{ background: "#0a0d13", border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginBottom: 14, maxHeight: 180, overflowY: "auto", fontSize: 12, color: C.muted, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
-              {result.docData.resumen_ejecutivo}{"\n\n"}{result.docData.secciones?.map(s => `## ${s.titulo}\n${s.contenido || ""}`).join("\n\n").substring(0, 600)}...
+              {result.docData.resumen_ejecutivo}{"\n\n"}{result.docData.arquitectura || ""}
             </div>
             <a href={result.url} download={result.name} style={{ display: "inline-block", padding: "10px 22px", background: "#276227", color: C.green, border: "1px solid #276227", borderRadius: 8, fontWeight: 600, fontSize: 13, textDecoration: "none" }}>
               ⬇ Descargar {result.name}
