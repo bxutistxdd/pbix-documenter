@@ -114,39 +114,41 @@ CONTEXTO: Reporte Power BI de Seguros del Estado. Mide métricas de implementaci
 {"titulo":"nombre limpio sin extension","introduccion":"4-5 oraciones. Usa 'la organización'. Menciona fuentes tales como SharePoint, Azure DevOps OData y VSTS. Contexto de negocio, objetivos, audiencia.","resumen_ejecutivo":"3-4 oraciones. Menciona específicamente archivo Power BI y reporte en Power BI Service. Qué métricas mide y su valor.","arquitectura":"3-4 oraciones sobre patrón del modelo, capas staging/dimensiones/hechos, convenciones de nomenclatura detectadas.","fuentes":[{"nombre":"Analytics OData - WorkItems","tipo":"OData / Azure DevOps Analytics","endpoint":"[PENDIENTE]","funcion":"Provee work items del proyecto segurosdelestado: épicas, historias, bugs e incidentes para métricas de seguimiento."},{"nombre":"Analytics OData - TestPlans","tipo":"OData / Azure DevOps Analytics","endpoint":"[PENDIENTE]","funcion":"Provee planes de prueba, casos de prueba y resultados de ejecución desde Azure DevOps."},{"nombre":"SharePoint Lista 1","tipo":"SharePoint List","endpoint":"[PENDIENTE]","funcion":"Lista de SharePoint. Completar con nombre y descripción real."},{"nombre":"SharePoint Lista 2","tipo":"SharePoint List","endpoint":"[PENDIENTE]","funcion":"Lista de SharePoint adicional. Completar con nombre y descripción real."}],"paginas":[{"pagina":"nombre exacto","proposito":"qué mide esta página y qué tipos de visuales contiene"}],"conclusiones":"3-4 oraciones con observaciones, buenas prácticas detectadas y recomendaciones de mejora."}`,
   "Call 1/3 — estructura general");
 
-  await new Promise(r=>setTimeout(r,8000));
+  await new Promise(r=>setTimeout(r,6000));
 
-  // CALL 2: table descriptions only (no columns - handled by static dict)
-  const tableNames=parsed.tables.map(t=>t.name);
-  const r2a=await call(`Experto Power BI. SOLO JSON sin markdown.
-Tablas del modelo: ${tableNames.join(", ")}
-Contexto: métricas implementación/testing Azure DevOps proyecto segurosdelestado. tbl_=hechos, DIM_=dimensiones, SP_=SharePoint, Hierarchy=jerarquía OData.
-{"tablas":[{"nombre":"nombre exacto","tipo":"Hecho/Dimensión/Staging/Parámetro/Calendario","origen":"OData Azure DevOps/SharePoint List/Calculada/Combinada","descripcion":"1-2 oraciones sobre la función de la tabla en el modelo"}]}
+  // CALL 2: tables + columns (no measures)
+  const tablesCompact=parsed.tables.map(t=>({n:t.name,cols:t.columns.map(c=>c.name).join("|")}));
+  const r2=await call(`Eres experto en Power BI y Azure DevOps. Responde SOLO JSON sin markdown.
+TABLAS: ${JSON.stringify(tablesCompact).substring(0,4500)}
+CONTEXTO: Proyecto segurosdelestado Azure DevOps. tbl_=hechos, DIM_=dimensiones, SP_=SharePoint, Hierarchy=jerarquía OData.
+{"tablas":[{"nombre":"nombre exacto","tipo":"Hecho/Dimensión/Staging/Parámetro/Calendario","origen":"OData Azure DevOps/SharePoint List/Calculada/Combinada","descripcion":"1-2 oraciones función de la tabla","columnas":[{"nombre":"nombre exacto col","descripcion":"qué representa, máximo 12 palabras"}]}]}
 Incluye las ${parsed.tables.length} tablas.`,
-  "Call 2/4 — tablas");
+  "Call 2/5 — tablas");
 
-  await new Promise(r=>setTimeout(r,8000));
+  await new Promise(r=>setTimeout(r,6000));
 
-  // CALL 3: measures - split in two batches if needed
+  // CALL 3a: measures batch 1 (first half)
   const half=Math.ceil(parsed.measures.length/2);
-  const batch1=parsed.measures.slice(0,half).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,100)}));
-  const batch2=parsed.measures.slice(half).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,100)}));
-
+  const batch1=parsed.measures.slice(0,half).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,120)}));
   const r3a=await call(`Experto DAX Power BI. SOLO JSON sin markdown.
-Medidas: ${JSON.stringify(batch1)}
-Para cada medida: 1 oración describiendo qué calcula y para qué se usa.
-{"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración"}]}`,
-  "Call 3a/4 — medidas (1/2)");
+Medidas (nombre, tabla, expresion resumida): ${JSON.stringify(batch1)}
+Contexto: reporte métricas implementación/testing Azure DevOps Seguros del Estado.
+Para cada medida: 1 oración describiendo qué calcula y para qué sirve en el reporte.
+{"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración clara y concisa"}]}`,
+  "Call 3a/5 — medidas lote 1");
 
-  await new Promise(r=>setTimeout(r,8000));
+  await new Promise(r=>setTimeout(r,6000));
 
+  // CALL 3b: measures batch 2 (second half)
+  const batch2=parsed.measures.slice(half).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,120)}));
   const r3b=await call(`Experto DAX Power BI. SOLO JSON sin markdown.
-Medidas: ${JSON.stringify(batch2)}
-Para cada medida: 1 oración describiendo qué calcula y para qué se usa.
-{"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración"}]}`,
-  "Call 3b/4 — medidas (2/2)");
+Medidas (nombre, tabla, expresion resumida): ${JSON.stringify(batch2)}
+Contexto: reporte métricas implementación/testing Azure DevOps Seguros del Estado.
+Para cada medida: 1 oración describiendo qué calcula y para qué sirve en el reporte.
+{"medidas":[{"nombre":"nombre exacto","descripcion":"1 oración clara y concisa"}]}`,
+  "Call 3b/5 — medidas lote 2");
 
-  const r2={tablas:r2a.tablas||[],medidas:[...(r3a.medidas||[]),...(r3b.medidas||[])]};
+  const r2final={...r2,medidas:[...(r3a.medidas||[]),...(r3b.medidas||[])]};
 
   await new Promise(r=>setTimeout(r,6000));
 
@@ -162,9 +164,9 @@ CONTEXTO: Modelo de métricas de implementación/testing en Azure DevOps para Se
 Para cada relación explica en 1 oración su motivo y uso en el modelo. Usa los nombres completos y reales de tablas y columnas.
 {"relaciones":[{"from":"tabla[columna] completo","to":"tabla[columna] completo","cardinalidad":"Uno a muchos/Muchos a uno/Muchos a muchos","activa":true,"motivo":"1 oración: por qué existe y cómo se usa para filtrar o cruzar datos"}]}
 IMPORTANTE: incluye las ${parsed.relationships.length} relaciones.`,
-  "Call 4/4 — relaciones");
+  "Call 4/5 — relaciones");
 
-  return {...r1,...r2,...r3};
+  return {...r1,...r2final,...r3};
 }
 
 async function buildDOCX(docData,parsed){
@@ -387,7 +389,7 @@ export default function App(){
     <div style={{background:C.dark,minHeight:"100vh",fontFamily:"'Segoe UI',system-ui,sans-serif",color:C.text}}>
       <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
         <span style={{fontSize:22}}>📊</span>
-        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v11</div></div>
+        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v12</div></div>
       </div>
       <div style={{maxWidth:760,margin:"0 auto",padding:"20px"}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:16,marginBottom:16}}>
