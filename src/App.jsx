@@ -114,16 +114,18 @@ CONTEXTO: Reporte Power BI de Seguros del Estado. Mide métricas de implementaci
 {"titulo":"nombre limpio sin extension","introduccion":"4-5 oraciones. Usa 'la organización'. Menciona fuentes tales como SharePoint, Azure DevOps OData y VSTS. Contexto de negocio, objetivos, audiencia.","resumen_ejecutivo":"3-4 oraciones. Menciona específicamente archivo Power BI y reporte en Power BI Service. Qué métricas mide y su valor.","arquitectura":"3-4 oraciones sobre patrón del modelo, capas staging/dimensiones/hechos, convenciones de nomenclatura detectadas.","fuentes":[{"nombre":"Analytics OData - WorkItems","tipo":"OData / Azure DevOps Analytics","endpoint":"[PENDIENTE]","funcion":"Provee work items del proyecto segurosdelestado: épicas, historias, bugs e incidentes para métricas de seguimiento."},{"nombre":"Analytics OData - TestPlans","tipo":"OData / Azure DevOps Analytics","endpoint":"[PENDIENTE]","funcion":"Provee planes de prueba, casos de prueba y resultados de ejecución desde Azure DevOps."},{"nombre":"SharePoint Lista 1","tipo":"SharePoint List","endpoint":"[PENDIENTE]","funcion":"Lista de SharePoint. Completar con nombre y descripción real."},{"nombre":"SharePoint Lista 2","tipo":"SharePoint List","endpoint":"[PENDIENTE]","funcion":"Lista de SharePoint adicional. Completar con nombre y descripción real."}],"paginas":[{"pagina":"nombre exacto","proposito":"qué mide esta página y qué tipos de visuales contiene"}],"conclusiones":"3-4 oraciones con observaciones, buenas prácticas detectadas y recomendaciones de mejora."}`,
   "Call 1/3 — estructura general");
 
-  await new Promise(r=>setTimeout(r,6000));
+  // CALL 2a+2b: tables in 2 batches (names only, no columns - static dict handles those)
+  const tHalf=Math.ceil(parsed.tables.length/2);
+  const tPrompt=(batch,label)=>call(`Experto Power BI Azure DevOps. SOLO JSON sin markdown.
+Tablas: ${batch.map(t=>t.name).join(", ")}
+Contexto: proyecto segurosdelestado. tbl_=hechos, DIM_=dimensiones, SP_=SharePoint, Hierarchy=jerarquía OData, WorkItems/WorkItemRevisions=OData Analytics.
+{"tablas":[{"nombre":"nombre exacto","tipo":"Hecho/Dimensión/Staging/Parámetro/Calendario","origen":"OData Azure DevOps/SharePoint List/Calculada/Combinada","descripcion":"1-2 oraciones sobre la función de esta tabla en el modelo"}]}`,label);
 
-  // CALL 2: tables + columns (no measures)
-  const tablesCompact=parsed.tables.map(t=>({n:t.name,cols:t.columns.map(c=>c.name).join("|")}));
-  const r2=await call(`Eres experto en Power BI y Azure DevOps. Responde SOLO JSON sin markdown.
-TABLAS: ${JSON.stringify(tablesCompact).substring(0,4500)}
-CONTEXTO: Proyecto segurosdelestado Azure DevOps. tbl_=hechos, DIM_=dimensiones, SP_=SharePoint, Hierarchy=jerarquía OData.
-{"tablas":[{"nombre":"nombre exacto","tipo":"Hecho/Dimensión/Staging/Parámetro/Calendario","origen":"OData Azure DevOps/SharePoint List/Calculada/Combinada","descripcion":"1-2 oraciones función de la tabla","columnas":[{"nombre":"nombre exacto col","descripcion":"qué representa, máximo 12 palabras"}]}]}
-Incluye las ${parsed.tables.length} tablas.`,
-  "Call 2/5 — tablas");
+  await new Promise(r=>setTimeout(r,6000));
+  const r2a=await tPrompt(parsed.tables.slice(0,tHalf),"Call 2a/6 — tablas lote 1/2");
+  await new Promise(r=>setTimeout(r,6000));
+  const r2b=await tPrompt(parsed.tables.slice(tHalf),"Call 2b/6 — tablas lote 2/2");
+  const r2={tablas:[...(r2a.tablas||[]),...(r2b.tablas||[])]};
 
   // CALL 3a-3d: measures in 4 batches
   const mPrompt=(batch,label)=>call(`Experto DAX Power BI. SOLO JSON sin markdown.
@@ -136,13 +138,13 @@ Para cada medida: 1 oración describiendo qué calcula y para qué sirve.
   const mkBatch=(i)=>parsed.measures.slice(i*bSize,(i+1)*bSize).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,120)}));
 
   await new Promise(r=>setTimeout(r,6000));
-  const r3a=await mPrompt(mkBatch(0),"Call 3a/6 — medidas lote 1/4");
+  const r3a=await mPrompt(mkBatch(0),"Call 3a/7 — medidas lote 1/4");
   await new Promise(r=>setTimeout(r,6000));
-  const r3b=await mPrompt(mkBatch(1),"Call 3b/6 — medidas lote 2/4");
+  const r3b=await mPrompt(mkBatch(1),"Call 3b/7 — medidas lote 2/4");
   await new Promise(r=>setTimeout(r,6000));
-  const r3c=await mPrompt(mkBatch(2),"Call 3c/6 — medidas lote 3/4");
+  const r3c=await mPrompt(mkBatch(2),"Call 3c/7 — medidas lote 3/4");
   await new Promise(r=>setTimeout(r,6000));
-  const r3d=await mPrompt(mkBatch(3),"Call 3d/6 — medidas lote 4/4");
+  const r3d=await mPrompt(mkBatch(3),"Call 3d/7 — medidas lote 4/4");
 
   const r2final={...r2,medidas:[...(r3a.medidas||[]),...(r3b.medidas||[]),...(r3c.medidas||[]),...(r3d.medidas||[])]};
 
@@ -160,7 +162,7 @@ CONTEXTO: Modelo de métricas de implementación/testing en Azure DevOps para Se
 Para cada relación explica en 1 oración su motivo y uso en el modelo. Usa los nombres completos y reales de tablas y columnas.
 {"relaciones":[{"from":"tabla[columna] completo","to":"tabla[columna] completo","cardinalidad":"Uno a muchos/Muchos a uno/Muchos a muchos","activa":true,"motivo":"1 oración: por qué existe y cómo se usa para filtrar o cruzar datos"}]}
 IMPORTANTE: incluye las ${parsed.relationships.length} relaciones.`,
-  "Call 5/6 — relaciones");
+  "Call 5/7 — relaciones");
 
   return {...r1,...r2final,...r3};
 }
@@ -385,7 +387,7 @@ export default function App(){
     <div style={{background:C.dark,minHeight:"100vh",fontFamily:"'Segoe UI',system-ui,sans-serif",color:C.text}}>
       <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
         <span style={{fontSize:22}}>📊</span>
-        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v13</div></div>
+        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v14</div></div>
       </div>
       <div style={{maxWidth:760,margin:"0 auto",padding:"20px"}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:16,marginBottom:16}}>
