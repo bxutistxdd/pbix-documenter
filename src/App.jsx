@@ -4,6 +4,23 @@ import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   PageNumber, LevelFormat, TableOfContents, PageBreak, Footer, Header } from "docx";
 import { getColumnDescription, getTableContext } from "./prompts.js";
 
+// Clean internal Power BI auto-generated table names
+function cleanTableName(name) {
+  if (!name) return name;
+  // LocalDateTable_GUID -> Tabla de Fechas (interna)
+  if (/^LocalDateTable_/i.test(name)) return "DateTable (auto)";
+  // DateTableTemplate_GUID -> Plantilla de Fecha
+  if (/^DateTableTemplate_/i.test(name)) return "DateTemplate (auto)";
+  // Any GUID-like suffix: strip it
+  return name.replace(/_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "").replace(/_[0-9a-f]{32}$/i, "");
+}
+function cleanRelPart(tableCol) {
+  // "TableName[Column]" -> "CleanTable[Column]"
+  const m = tableCol.match(/^(.+?)\[(.+)\]$/);
+  if (!m) return tableCol;
+  return `${cleanTableName(m[1])}[${m[2]}]`;
+}
+
 const C={yellow:"#f7c948",dark:"#0f1117",mid:"#1a1f2e",surface:"#141824",border:"#2d3748",text:"#e2e8f0",muted:"#718096",green:"#68d391",blue:"#63b3ed",red:"#fc8181",orange:"#f6ad55"};
 
 function decodeBuffer(buf){
@@ -264,8 +281,8 @@ async function buildDOCX(docData,parsed){
       const card=r.cardinality==="BothDirections"?"Muchos a muchos":r.cardinality==="ManyToOne"?"Muchos a uno":"Uno a muchos";
       return new TableRow({children:[
         new TableCell({borders,shading:{fill:i%2===0?"FFFFFF":LGRAY,type:ShadingType.CLEAR},width:{size:3400,type:WidthType.DXA},margins:{top:60,bottom:60,left:120,right:120},children:[
-          new Paragraph({children:[new TextRun({text:`${r.fromTable}[${r.fromColumn}]`,size:18,font:"Calibri",bold:true})]}),
-          new Paragraph({children:[new TextRun({text:`→ ${r.toTable}[${r.toColumn}]`,size:18,font:"Calibri",color:ACCENT})]}),
+          new Paragraph({children:[new TextRun({text:`${cleanTableName(r.fromTable)}[${r.fromColumn}]`,size:18,font:"Calibri",bold:true})]}),
+          new Paragraph({children:[new TextRun({text:`→ ${cleanTableName(r.toTable)}[${r.toColumn}]`,size:18,font:"Calibri",color:ACCENT})]}),
         ]}),
         dCell(card,1500,i),
         new TableCell({borders,shading:{fill:i%2===0?"FFFFFF":LGRAY,type:ShadingType.CLEAR},width:{size:800,type:WidthType.DXA},margins:{top:60,bottom:60,left:120,right:120},children:[new Paragraph({children:[new TextRun({text:r.active?"✓ Activa":"✗ Inactiva",size:18,font:"Calibri",color:r.active?"276227":"C00000",bold:true})]})]}),
