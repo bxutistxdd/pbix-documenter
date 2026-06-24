@@ -62,7 +62,9 @@ async function parseFile(file){
         }
         R.tables.push(entry);
       }
+      const isAutoDate=(n)=>n&&(/^LocalDateTable_/i.test(n)||/^DateTableTemplate_/i.test(n));
       for(const r of(db.relationships||[])){
+        if(isAutoDate(r.fromTable)||isAutoDate(r.toTable))continue;
         R.relationships.push({
           fromTable:r.fromTable,fromColumn:r.fromColumn,
           toTable:r.toTable,toColumn:r.toColumn,
