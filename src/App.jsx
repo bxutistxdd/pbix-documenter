@@ -93,18 +93,23 @@ async function parseFile(file){
 async function analyzeWithGroq(parsed, groqKey, addLog){
   const call=async(prompt,label)=>{
     addLog(`Groq: ${label}...`,"info");
-    for(let attempt=0;attempt<3;attempt++){
-      const res=await fetch("https://api.groq.com/openai/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${groqKey}`},body:JSON.stringify({model:"llama-3.3-70b-versatile",max_tokens:3000,temperature:0.2,messages:[{role:"user",content:prompt}],response_format:{type:"json_object"}})});
+    for(let attempt=0;attempt<5;attempt++){
+      const res=await fetch("https://api.groq.com/openai/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${groqKey}`},body:JSON.stringify({model:"llama-3.3-70b-versatile",max_tokens:2000,temperature:0.2,messages:[{role:"user",content:prompt}],response_format:{type:"json_object"}})});
       if(res.status===429){
-        const wait=attempt===0?36000:72000;
-        addLog(`Rate limit — esperando ${wait/1000}s...`,"warn");
+        // Parse retry-after from response if available
+        const errBody=await res.json().catch(()=>({}));
+        const retryMsg=errBody?.error?.message||"";
+        const secondsMatch=retryMsg.match(/([\d.]+)s/);
+        const suggested=secondsMatch?Math.ceil(parseFloat(secondsMatch[1]))*1000:0;
+        const wait=suggested||[62000,65000,90000,120000][attempt]||120000;
+        addLog(`Rate limit — esperando ${Math.ceil(wait/1000)}s (intento ${attempt+1}/5)...`,"warn");
         await new Promise(r=>setTimeout(r,wait));continue;
       }
       if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(err?.error?.message||`Groq ${res.status}`);}
       addLog(`✓ ${label} completado`,"ok");
       return JSON.parse((await res.json()).choices?.[0]?.message?.content||"{}");
     }
-    throw new Error("Rate limit persistente. Espera 1 minuto e intenta de nuevo.");
+    throw new Error("Rate limit persistente después de 5 intentos. Espera 2 minutos e intenta de nuevo.");
   };
 
   // CALL 1: framing + pages
@@ -121,9 +126,9 @@ Tablas: ${batch.map(t=>t.name).join(", ")}
 Contexto: proyecto segurosdelestado. tbl_=hechos, DIM_=dimensiones, SP_=SharePoint, Hierarchy=jerarquía OData, WorkItems/WorkItemRevisions=OData Analytics.
 {"tablas":[{"nombre":"nombre exacto","tipo":"Hecho/Dimensión/Staging/Parámetro/Calendario","origen":"OData Azure DevOps/SharePoint List/Calculada/Combinada","descripcion":"1-2 oraciones sobre la función de esta tabla en el modelo"}]}`,label);
 
-  await new Promise(r=>setTimeout(r,6000));
+  await new Promise(r=>setTimeout(r,12000));
   const r2a=await tPrompt(parsed.tables.slice(0,tHalf),"Call 2a/6 — tablas lote 1/2");
-  await new Promise(r=>setTimeout(r,6000));
+  await new Promise(r=>setTimeout(r,12000));
   const r2b=await tPrompt(parsed.tables.slice(tHalf),"Call 2b/6 — tablas lote 2/2");
   const r2={tablas:[...(r2a.tablas||[]),...(r2b.tablas||[])]};
 
@@ -137,18 +142,18 @@ Para cada medida: 1 oración describiendo qué calcula y para qué sirve.
   const bSize=Math.ceil(parsed.measures.length/4);
   const mkBatch=(i)=>parsed.measures.slice(i*bSize,(i+1)*bSize).map(m=>({n:m.name,t:m.table,e:m.expression.replace(/\s+/g," ").substring(0,120)}));
 
-  await new Promise(r=>setTimeout(r,6000));
+  await new Promise(r=>setTimeout(r,12000));
   const r3a=await mPrompt(mkBatch(0),"Call 3a/7 — medidas lote 1/4");
-  await new Promise(r=>setTimeout(r,6000));
+  await new Promise(r=>setTimeout(r,12000));
   const r3b=await mPrompt(mkBatch(1),"Call 3b/7 — medidas lote 2/4");
-  await new Promise(r=>setTimeout(r,6000));
+  await new Promise(r=>setTimeout(r,12000));
   const r3c=await mPrompt(mkBatch(2),"Call 3c/7 — medidas lote 3/4");
-  await new Promise(r=>setTimeout(r,6000));
+  await new Promise(r=>setTimeout(r,12000));
   const r3d=await mPrompt(mkBatch(3),"Call 3d/7 — medidas lote 4/4");
 
   const r2final={...r2,medidas:[...(r3a.medidas||[]),...(r3b.medidas||[]),...(r3c.medidas||[]),...(r3d.medidas||[])]};
 
-  await new Promise(r=>setTimeout(r,6000));
+  await new Promise(r=>setTimeout(r,12000));
 
   // CALL 3: relationships with full names and purpose
   const relsForAI=parsed.relationships.map(r=>({
@@ -387,7 +392,7 @@ export default function App(){
     <div style={{background:C.dark,minHeight:"100vh",fontFamily:"'Segoe UI',system-ui,sans-serif",color:C.text}}>
       <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
         <span style={{fontSize:22}}>📊</span>
-        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v14</div></div>
+        <div><div style={{fontWeight:700,fontSize:15,color:C.yellow}}>PBIX / PBIT Documenter</div><div style={{fontSize:11,color:C.muted}}>Groq · llama-3.3-70b · Word profesional · v15</div></div>
       </div>
       <div style={{maxWidth:760,margin:"0 auto",padding:"20px"}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:16,marginBottom:16}}>
