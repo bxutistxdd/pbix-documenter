@@ -199,12 +199,15 @@ async function callGroqWithModelFallback(body, groqKey, onLog, contextLabel = ""
 }
 
 const DAX_INSTRUCTIONS = `Cada medida incluye su expresión DAX real en el campo "dax" — es la FUENTE DE VERDAD del cálculo, no te bases solo en el nombre.
-Si el DAX referencia otras medidas entre corchetes (ej. [NombreMedida]), menciona esa dependencia explícitamente en "proposito" (ej. "Calcula la diferencia en días entre [X] y [Y]").
+Explica QUÉ hace la fórmula, no solo qué mide en general: identifica la operación real (resta, ratio/proporción, porcentaje, promedio, conteo, DATEDIFF, SUM, etc.) y qué representa en términos de negocio.
+Prohibido usar frases vacías como "calcula cumplimiento", "mide desempeño" o "evalúa el resultado" sin explicar el cálculo — describe la operación (ej. "Calcula qué tan cerca estuvo lo real de lo planeado, como 1 menos la desviación relativa entre [DR] y [DP]").
+Si hay IF anidados con distintos casos, resume la lógica principal (caso normal) sin listar cada rama.
+Si el DAX referencia otras medidas entre corchetes (ej. [NombreMedida]), menciónalas por nombre cuando sea relevante para entender el cálculo.
 Si "dax" viene vacío, infiere el propósito por el nombre y la tabla.`;
 
 async function analyzeMeasuresBatch(chunk, groqKey, onLog, batchIndex, totalBatches) {
   const prompt = `Eres experto en DAX y Power BI. ${DAX_INSTRUCTIONS}
-Sé conciso (máx ~22 palabras por propósito).
+Sé conciso pero explícito sobre el cálculo (máx ~30 palabras por propósito).
 
 MEDIDAS (lote ${batchIndex + 1}/${totalBatches}):
 ${JSON.stringify(chunk)}
@@ -212,7 +215,7 @@ ${JSON.stringify(chunk)}
 Responde SOLO JSON válido: { "medidas": [{ "medida": "nombre exacto", "proposito": "..." }] } — incluye TODAS las medidas del lote, usando el nombre exacto del campo "n".`;
 
   const body = {
-    max_tokens: Math.min(4000, 300 + chunk.length * 60),
+    max_tokens: Math.min(4000, 300 + chunk.length * 80),
     temperature: 0.2,
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
@@ -242,7 +245,7 @@ async function analyzeWithGroq(parsed, groqKey, onLog, { includeDax = true, onPr
 
   const daxNote = singleCall ? `\n${DAX_INSTRUCTIONS}` : "";
   const prompt = `Eres experto en Power BI. Genera narrativa de documentación técnica en español para este modelo.
-No inventes datos: describe en función de los nombres. Sé conciso (cada descripción/propósito máx ~${singleCall ? 22 : 18} palabras).${daxNote}
+No inventes datos: describe en función de los nombres. Sé conciso (cada descripción/propósito máx ~${singleCall ? 30 : 18} palabras).${daxNote}
 
 MODELO:
 ${JSON.stringify(summary)}
