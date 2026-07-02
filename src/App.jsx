@@ -155,22 +155,97 @@ async function groqFetch(body, groqKey, onLog) {
   }
 }
 
-async function analyzeWithGroq(parsed, groqKey, onLog) {
-  // Resumen COMPACTO: solo nombres/tipos (no DAX ni todas las columnas) → entrada chica, cabe en 1 call.
+// 70b: mejor calidad pero solo 100K TPD (tokens/día). 8b-instant: ~500K TPD → respaldo cuando se agota el día.
+const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+
+const MAX_EXPR_CHARS = 700;              // cap por expresión DAX individual, tras normalizar espacios
+const SINGLE_CALL_MEASURE_BUDGET = 9000; // si el payload de medidas+DAX cabe aquí, todo va en 1 sola llamada
+const CHUNK_CHAR_BUDGET = 8000;          // tamaño de lote cuando SÍ hace falta batching
+const MAX_MEASURES_PER_CHUNK = 25;       // tope duro de medidas por lote (evita que el modelo "pierda" ítems)
+
+function normalizeExpr(expr, maxChars = MAX_EXPR_CHARS) {
+  if (!expr) return "";
+  const collapsed = expr.replace(/\s+/g, " ").trim();
+  return collapsed.length > maxChars ? collapsed.slice(0, maxChars) + " …[truncado]" : collapsed;
+}
+
+function chunkMeasures(items, { charBudget = CHUNK_CHAR_BUDGET, maxPerChunk = MAX_MEASURES_PER_CHUNK } = {}) {
+  const chunks = [];
+  let current = [], currentChars = 2;
+  for (const it of items) {
+    const itChars = JSON.stringify(it).length + 1;
+    if (current.length && (currentChars + itChars > charBudget || current.length >= maxPerChunk)) {
+      chunks.push(current); current = []; currentChars = 2;
+    }
+    current.push(it); currentChars += itChars;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}
+
+async function callGroqWithModelFallback(body, groqKey, onLog, contextLabel = "") {
+  for (let i = 0; i < MODELS.length; i++) {
+    try {
+      if (i > 0) onLog?.(`${contextLabel}Presupuesto diario (TPD) de ${MODELS[i - 1]} agotado. Cambiando a ${MODELS[i]}...`, "warn");
+      const data = await groqFetch({ ...body, model: MODELS[i] }, groqKey, onLog);
+      if (i > 0) onLog?.(`${contextLabel}Generado con modelo de respaldo ${MODELS[i]} (calidad menor que 70b).`, "ok");
+      return JSON.parse(data.choices?.[0]?.message?.content || "{}");
+    } catch (e) {
+      if (e.isDailyLimit && i < MODELS.length - 1) continue;
+      if (e.isDailyLimit) throw new Error("Presupuesto diario agotado en todos los modelos. Reintenta tras el reseteo (medianoche UTC).");
+      throw e;
+    }
+  }
+}
+
+const DAX_INSTRUCTIONS = `Cada medida incluye su expresión DAX real en el campo "dax" — es la FUENTE DE VERDAD del cálculo, no te bases solo en el nombre.
+Si el DAX referencia otras medidas entre corchetes (ej. [NombreMedida]), menciona esa dependencia explícitamente en "proposito" (ej. "Calcula la diferencia en días entre [X] y [Y]").
+Si "dax" viene vacío, infiere el propósito por el nombre y la tabla.`;
+
+async function analyzeMeasuresBatch(chunk, groqKey, onLog, batchIndex, totalBatches) {
+  const prompt = `Eres experto en DAX y Power BI. ${DAX_INSTRUCTIONS}
+Sé conciso (máx ~22 palabras por propósito).
+
+MEDIDAS (lote ${batchIndex + 1}/${totalBatches}):
+${JSON.stringify(chunk)}
+
+Responde SOLO JSON válido: { "medidas": [{ "medida": "nombre exacto", "proposito": "..." }] } — incluye TODAS las medidas del lote, usando el nombre exacto del campo "n".`;
+
+  const body = {
+    max_tokens: Math.min(4000, 300 + chunk.length * 60),
+    temperature: 0.2,
+    messages: [{ role: "user", content: prompt }],
+    response_format: { type: "json_object" },
+  };
+
+  try {
+    const parsed = await callGroqWithModelFallback(body, groqKey, onLog, `[Medidas ${batchIndex + 1}/${totalBatches}] `);
+    return parsed.medidas || [];
+  } catch (e) {
+    onLog?.(`Lote de medidas ${batchIndex + 1}/${totalBatches} falló (${e.message}). Se usará descripción por defecto para estas medidas.`, "warn");
+    return chunk.map(m => ({ medida: m.n, proposito: "" }));
+  }
+}
+
+async function analyzeWithGroq(parsed, groqKey, onLog, { includeDax = true, onProgress } = {}) {
   const realRels = parsed.relationships.filter(r => !/LocalDateTable|DateTableTemplate/i.test(`${r.fromTable}${r.toTable}`));
+  const measureItems = parsed.measures.map(m => ({ n: m.name, t: m.table, dax: includeDax ? normalizeExpr(m.expression) : "" }));
+  const singleCall = JSON.stringify(measureItems).length <= SINGLE_CALL_MEASURE_BUDGET;
+
   const summary = {
     fileName: parsed.fileName,
     tablas: parsed.tables.map(t => ({ n: t.name, cols: t.columns.slice(0, 12).map(c => c.name) })),
-    medidas: parsed.measures.map(m => ({ n: m.name, t: m.table })),
+    medidas: singleCall ? measureItems : parsed.measures.map(m => ({ n: m.name, t: m.table })),
     relaciones: realRels.map(r => ({ d: r.from, h: r.to })),
     paginas: parsed.pages.map(p => ({ n: p.name, vis: p.visuals.map(v => v.type) })),
   };
 
+  const daxNote = singleCall ? `\n${DAX_INSTRUCTIONS}` : "";
   const prompt = `Eres experto en Power BI. Genera narrativa de documentación técnica en español para este modelo.
-No inventes datos: describe en función de los nombres. Sé conciso (cada descripción/propósito máx ~18 palabras).
+No inventes datos: describe en función de los nombres. Sé conciso (cada descripción/propósito máx ~${singleCall ? 22 : 18} palabras).${daxNote}
 
 MODELO:
-${JSON.stringify(summary).substring(0, 12000)}
+${JSON.stringify(summary)}
 
 Responde SOLO JSON válido (sin markdown), con esta estructura EXACTA:
 {
@@ -193,23 +268,20 @@ Incluye TODOS los elementos del modelo. Usa los nombres exactos para poder casar
     response_format: { type: "json_object" },
   };
 
-  // 70b: mejor calidad pero solo 100K TPD. 8b-instant: ~500K TPD → respaldo cuando se agota el día.
-  const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
-  let data;
-  for (let i = 0; i < MODELS.length; i++) {
-    try {
-      if (i > 0) onLog?.(`Presupuesto diario (TPD) de ${MODELS[i - 1]} agotado. Cambiando a ${MODELS[i]}...`, "warn");
-      data = await groqFetch({ ...body, model: MODELS[i] }, groqKey, onLog);
-      if (i > 0) onLog?.(`Generado con modelo de respaldo ${MODELS[i]} (calidad menor que 70b).`, "ok");
-      break;
-    } catch (e) {
-      if (e.isDailyLimit && i < MODELS.length - 1) continue;
-      if (e.isDailyLimit) throw new Error("Presupuesto diario agotado en todos los modelos. Reintenta tras el reseteo (medianoche UTC).");
-      throw e;
+  const docData = await callGroqWithModelFallback(body, groqKey, onLog);
+
+  if (!singleCall) {
+    const chunks = chunkMeasures(measureItems);
+    onLog?.(`Medidas: ${JSON.stringify(measureItems).length} caracteres con DAX → ${chunks.length} lotes.`, "info");
+    docData.medidas = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const batchResult = await analyzeMeasuresBatch(chunks[i], groqKey, onLog, i, chunks.length);
+      docData.medidas.push(...batchResult);
+      onProgress?.((i + 1) / chunks.length);
     }
   }
 
-  return JSON.parse(data.choices?.[0]?.message?.content || "{}");
+  return docData;
 }
 
 const inp = { background: "#0a0d13", border: `1px solid #2d3748`, borderRadius: 8, color: "#e2e8f0", fontSize: 13, padding: "10px 14px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", outline: "none" };
@@ -223,6 +295,7 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [includeDax, setIncludeDax] = useState(true);
   const logRef = useRef(null);
   const lc = { info: C.blue, ok: C.green, warn: C.orange, error: C.red, section: C.yellow };
 
@@ -249,7 +322,10 @@ export default function App() {
         parsed.warnings.forEach(w => addLog(w, "warn"));
         addLog(`✓ Tablas: ${parsed.tables.length} · Medidas: ${parsed.measures.length} · Relaciones: ${parsed.relationships.length} · Páginas: ${parsed.pages.length}`, "ok");
         addLog("Analizando con Groq llama-3.3-70b...", "info");
-        const docData = await analyzeWithGroq(parsed, groqKey.trim(), addLog);
+        const docData = await analyzeWithGroq(parsed, groqKey.trim(), addLog, {
+          includeDax,
+          onProgress: p => setProgress(35 + Math.round(p * 45)),
+        });
         setProgress(85); addLog("✓ Análisis completado", "ok");
         addLog("Generando documento Word...", "info");
         const blob = await buildDocxBlob(docData, parsed);
@@ -281,6 +357,10 @@ export default function App() {
             <button onClick={() => setShowKey(p => !p)} style={{ background: C.mid, border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, padding: "0 14px", cursor: "pointer" }}>{showKey ? "🙈" : "👁"}</button>
           </div>
           {groqKey && <div style={{ fontSize: 11, color: C.green, marginTop: 6 }}>✓ Key guardada en este navegador</div>}
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.muted, marginTop: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={includeDax} onChange={e => setIncludeDax(e.target.checked)} />
+            Incluir código DAX en el análisis (mejor precisión de propósito, puede requerir varios lotes en modelos grandes)
+          </label>
         </div>
 
         <div onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
